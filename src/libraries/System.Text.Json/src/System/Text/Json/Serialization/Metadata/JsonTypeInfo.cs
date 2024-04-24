@@ -989,8 +989,9 @@ namespace System.Text.Json.Serialization.Metadata
 
         // Untyped, root-level serialization methods
         internal abstract void SerializeAsObject(Utf8JsonWriter writer, object? rootValue);
-        internal abstract Task SerializeAsObjectAsync(Stream utf8Json, object? rootValue, CancellationToken cancellationToken);
+        internal abstract Task SerializeAsObjectAsync<TWriter>(TWriter utf8Json, object? rootValue, CancellationToken cancellationToken) where TWriter : struct, IWriterWrapper;
         internal abstract Task SerializeAsObjectAsync(System.IO.Pipelines.PipeWriter utf8Json, object? rootValue, CancellationToken cancellationToken);
+        internal abstract Task SerializeAsObjectAsync(Stream utf8Json, object? rootValue, CancellationToken cancellationToken);
         internal abstract void SerializeAsObject(Stream utf8Json, object? rootValue);
 
         // Untyped, root-level deserialization methods
@@ -1409,5 +1410,16 @@ namespace System.Text.Json.Serialization.Metadata
 
         [DebuggerBrowsable(DebuggerBrowsableState.Never)]
         private string DebuggerDisplay => $"Type = {Type.Name}, Kind = {Kind}";
+
+        internal interface IWriterWrapper
+        {
+            int FlushThreshold { get; }
+
+            ValueTask FlushAsync(CancellationToken cancellationToken);
+
+            (Utf8JsonWriter, IDisposable) GetWriter(bool allowPooled);
+
+            void ReturnWriter(Utf8JsonWriter utf8JsonWriter);
+        }
     }
 }
