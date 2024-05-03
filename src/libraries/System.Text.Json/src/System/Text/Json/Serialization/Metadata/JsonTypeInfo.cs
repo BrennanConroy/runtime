@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Buffers;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -989,7 +990,7 @@ namespace System.Text.Json.Serialization.Metadata
 
         // Untyped, root-level serialization methods
         internal abstract void SerializeAsObject(Utf8JsonWriter writer, object? rootValue);
-        internal abstract Task SerializeAsObjectAsync<TWriter>(TWriter utf8Json, object? rootValue, CancellationToken cancellationToken) where TWriter : struct, IWriterWrapper;
+        internal abstract Task SerializeAsObjectAsync<TSerializationContext>(TSerializationContext serializationContext, object? rootValue, CancellationToken cancellationToken) where TSerializationContext : struct, IAsyncSerializationBufferWriterContext;
         internal abstract Task SerializeAsObjectAsync(System.IO.Pipelines.PipeWriter utf8Json, object? rootValue, CancellationToken cancellationToken);
         internal abstract Task SerializeAsObjectAsync(Stream utf8Json, object? rootValue, CancellationToken cancellationToken);
         internal abstract void SerializeAsObject(Stream utf8Json, object? rootValue);
@@ -1411,15 +1412,13 @@ namespace System.Text.Json.Serialization.Metadata
         [DebuggerBrowsable(DebuggerBrowsableState.Never)]
         private string DebuggerDisplay => $"Type = {Type.Name}, Kind = {Kind}";
 
-        internal interface IWriterWrapper
+        internal interface IAsyncSerializationBufferWriterContext : IDisposable
         {
             int FlushThreshold { get; }
 
             ValueTask FlushAsync(CancellationToken cancellationToken);
 
-            (Utf8JsonWriter, IDisposable) GetWriter(bool allowPooled);
-
-            void ReturnWriter(Utf8JsonWriter utf8JsonWriter);
+            public IBufferWriter<byte> BufferWriter { get; }
         }
     }
 }

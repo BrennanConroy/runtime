@@ -1,6 +1,7 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Buffers;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipelines;
@@ -66,7 +67,7 @@ namespace System.Text.Json.Serialization.Metadata
             CancellationToken cancellationToken,
             object? rootValueBoxed = null)
         {
-            return SerializeAsync(new PipeSerializer(pipeWriter, Options), rootValue, cancellationToken, rootValueBoxed);
+            return SerializeAsync(new AsyncSerializationPipeContext(pipeWriter), rootValue, cancellationToken, rootValueBoxed);
         }
 
         internal Task SerializeAsync(
@@ -75,15 +76,15 @@ namespace System.Text.Json.Serialization.Metadata
             CancellationToken cancellationToken,
             object? rootValueBoxed = null)
         {
-            return SerializeAsync(new StreamSerializer(stream, Options), rootValue, cancellationToken, rootValueBoxed);
+            return SerializeAsync(new AsyncSerializationStreamContext(stream, Options), rootValue, cancellationToken, rootValueBoxed);
         }
 
         // Root serialization method for async streaming serialization.
-        private async Task SerializeAsync<TWriter>(
-            TWriter writerWrapper,
+        private async Task SerializeAsync<TSerializationContext>(
+            TSerializationContext serializationContext,
             T? rootValue,
             CancellationToken cancellationToken,
-            object? rootValueBoxed = null) where TWriter : struct, IWriterWrapper
+            object? rootValueBoxed = null) where TSerializationContext : struct, IAsyncSerializationBufferWriterContext
         {
             Debug.Assert(IsConfigured);
             Debug.Assert(rootValueBoxed is null || rootValueBoxed is T);
@@ -95,9 +96,9 @@ namespace System.Text.Json.Serialization.Metadata
                 Debug.Assert(CanUseSerializeHandler);
                 Debug.Assert(Converter is JsonMetadataServicesConverter<T>);
 
-                (Utf8JsonWriter writer, IDisposable disposable) = writerWrapper.GetWriter(allowPooled: true);
+                Utf8JsonWriter writer = Utf8JsonWriterCache.RentWriter(Options, serializationContext.BufferWriter);
 
-                using (disposable)
+                using (serializationContext)
                 {
                     try
                     {
@@ -110,10 +111,10 @@ namespace System.Text.Json.Serialization.Metadata
                         // since we want to immediately opt out of the fast path if it exceeds the threshold.
                         OnRootLevelAsyncSerializationCompleted(writer.BytesCommitted + writer.BytesPending);
 
-                        writerWrapper.ReturnWriter(writer);
+                        Utf8JsonWriterCache.ReturnWriter(writer);
                     }
 
-                    await writerWrapper.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    await serializationContext.FlushAsync(cancellationToken).ConfigureAwait(false);
                 }
             }
             else if (
@@ -125,7 +126,7 @@ namespace System.Text.Json.Serialization.Metadata
                 Options.TryGetPolymorphicTypeInfoForRootType(rootValue, out JsonTypeInfo? derivedTypeInfo))
             {
                 Debug.Assert(typeof(T) == typeof(object));
-                await derivedTypeInfo.SerializeAsObjectAsync(writerWrapper, rootValue, cancellationToken).ConfigureAwait(false);
+                await derivedTypeInfo.SerializeAsObjectAsync(serializationContext, rootValue, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -138,16 +139,16 @@ namespace System.Text.Json.Serialization.Metadata
 
                 state.CancellationToken = cancellationToken;
 
-                (Utf8JsonWriter writer, IDisposable disposable) = writerWrapper.GetWriter(allowPooled: false);
+                Utf8JsonWriter writer = new Utf8JsonWriter(serializationContext.BufferWriter, Options.GetWriterOptions());
 
-                using (disposable)
+                using (serializationContext)
                 using (writer)
                 {
                     try
                     {
                         do
                         {
-                            state.FlushThreshold = writerWrapper.FlushThreshold;
+                            state.FlushThreshold = serializationContext.FlushThreshold;
 
                             try
                             {
@@ -162,7 +163,7 @@ namespace System.Text.Json.Serialization.Metadata
                                 }
                                 else
                                 {
-                                    await writerWrapper.FlushAsync(cancellationToken).ConfigureAwait(false);
+                                    await serializationContext.FlushAsync(cancellationToken).ConfigureAwait(false);
                                 }
                             }
                             finally
@@ -344,75 +345,53 @@ namespace System.Text.Json.Serialization.Metadata
             }
         }
 
-        private struct StreamSerializer : IWriterWrapper
+        private readonly struct AsyncSerializationStreamContext : IAsyncSerializationBufferWriterContext
         {
             private readonly Stream _stream;
             private readonly JsonSerializerOptions _options;
-            private PooledByteBufferWriter? _bufferWriter;
+            private readonly PooledByteBufferWriter _bufferWriter;
 
-            public StreamSerializer(Stream stream, JsonSerializerOptions options)
+            public AsyncSerializationStreamContext(Stream stream, JsonSerializerOptions options)
             {
                 _stream = stream;
                 _options = options;
+                _bufferWriter = new PooledByteBufferWriter(_options.DefaultBufferSize);
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public async ValueTask FlushAsync(CancellationToken cancellationToken)
             {
-                await _bufferWriter!.WriteToStreamAsync(_stream, cancellationToken).ConfigureAwait(false);
-                _bufferWriter!.Clear();
+                await _bufferWriter.WriteToStreamAsync(_stream, cancellationToken).ConfigureAwait(false);
+                _bufferWriter.Clear();
             }
 
             public int FlushThreshold => (int)(_options.DefaultBufferSize * JsonSerializer.FlushThreshold);
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public (Utf8JsonWriter, IDisposable) GetWriter(bool allowPooled)
-            {
-                _bufferWriter = new PooledByteBufferWriter(_options.DefaultBufferSize);
-                if (allowPooled)
-                {
-                    return (Utf8JsonWriterCache.RentWriter(_options, _bufferWriter), _bufferWriter);
-                }
+            public IBufferWriter<byte> BufferWriter => _bufferWriter;
 
-                return (new Utf8JsonWriter(_bufferWriter, _options.GetWriterOptions()), _bufferWriter);
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void ReturnWriter(Utf8JsonWriter utf8JsonWriter)
+            public void Dispose()
             {
-                Utf8JsonWriterCache.ReturnWriter(utf8JsonWriter);
+                _bufferWriter.Dispose();
             }
         }
 
-        private readonly struct PipeSerializer : IWriterWrapper
+        private readonly struct AsyncSerializationPipeContext : IAsyncSerializationBufferWriterContext
         {
             private readonly PipeWriter _pipe;
-            private readonly JsonSerializerOptions _options;
 
-            public PipeSerializer(PipeWriter pipe, JsonSerializerOptions options)
+            public AsyncSerializationPipeContext(PipeWriter pipe)
             {
                 _pipe = pipe;
-                _options = options;
             }
 
-            public int FlushThreshold => (int)(_options.DefaultBufferSize * JsonSerializer.FlushThreshold);
+            public int FlushThreshold => (int)((4 * PipeOptions.Default.MinimumSegmentSize) * JsonSerializer.FlushThreshold);
+
+            public IBufferWriter<byte> BufferWriter => _pipe;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             public async ValueTask FlushAsync(CancellationToken cancellationToken) => await _pipe.FlushAsync(cancellationToken).ConfigureAwait(false);
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public (Utf8JsonWriter, IDisposable) GetWriter(bool allowPooled)
-            {
-                if (allowPooled)
-                {
-                    return (Utf8JsonWriterCache.RentWriter(_options, _pipe), Task.CompletedTask);
-                }
-
-                return (new Utf8JsonWriter(_pipe, _options.GetWriterOptions()), Task.CompletedTask);
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public void ReturnWriter(Utf8JsonWriter utf8JsonWriter) => Utf8JsonWriterCache.ReturnWriter(utf8JsonWriter);
+            public void Dispose() { }
         }
     }
 }
