@@ -173,8 +173,12 @@ namespace System.Text.Json.Serialization
 
         internal static bool ShouldFlush(Utf8JsonWriter writer, ref WriteStack state)
         {
-            // If surpassed flush threshold then return false which will flush stream.
-            return (state.FlushThreshold > 0 && writer.BytesPending > state.FlushThreshold);
+            if (state.FlushThreshold > 0)
+            {
+                // If surpassed flush threshold then return false which will flush stream.
+                return writer.UnFlushedBytes > state.FlushThreshold || writer.BytesPending > state.FlushThreshold;
+            }
+            return false;
         }
 
         internal abstract object? ReadAsObject(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options);

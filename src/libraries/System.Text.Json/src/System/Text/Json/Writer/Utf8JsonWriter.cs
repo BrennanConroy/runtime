@@ -77,6 +77,8 @@ namespace System.Text.Json
         /// </remarks>
         public long BytesCommitted { get; private set; }
 
+        internal int UnFlushedBytes { get; private set; }
+
         /// <summary>
         /// Gets the custom behavior when writing JSON using
         /// the <see cref="Utf8JsonWriter"/> which indicates whether to format the output
@@ -327,6 +329,7 @@ namespace System.Text.Json
             }
             else
             {
+                UnFlushedBytes = 0;
                 Debug.Assert(_output != null);
                 if (BytesPending != 0)
                 {
@@ -1087,6 +1090,7 @@ namespace System.Text.Json
 
                 _output.Advance(BytesPending);
                 BytesCommitted += BytesPending;
+                UnFlushedBytes += BytesPending;
                 BytesPending = 0;
 
                 _memory = _output.GetMemory(sizeHint);
