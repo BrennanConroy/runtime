@@ -77,7 +77,7 @@ namespace System.Text.Json
         /// </remarks>
         public long BytesCommitted { get; private set; }
 
-        internal int UnFlushedBytes { get; private set; }
+        internal int UnFlushedBytes { get; set; }
 
         /// <summary>
         /// Gets the custom behavior when writing JSON using
@@ -329,12 +329,12 @@ namespace System.Text.Json
             }
             else
             {
-                UnFlushedBytes = 0;
                 Debug.Assert(_output != null);
                 if (BytesPending != 0)
                 {
                     _output.Advance(BytesPending);
                     BytesCommitted += BytesPending;
+                    UnFlushedBytes += BytesPending;
                     BytesPending = 0;
                 }
             }

@@ -112,6 +112,7 @@ namespace System.Text.Json.Serialization.Metadata
                     }
 
                     await serializationContext.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    writer.UnFlushedBytes = 0;
                 }
                 finally
                 {
@@ -162,6 +163,7 @@ namespace System.Text.Json.Serialization.Metadata
                             else
                             {
                                 await serializationContext.FlushAsync(cancellationToken).ConfigureAwait(false);
+                                writer.UnFlushedBytes = 0;
                             }
                         }
                         finally
@@ -237,6 +239,7 @@ namespace System.Text.Json.Serialization.Metadata
                     SerializeHandler(writer, rootValue!);
                     writer.Flush();
                     bufferWriter.WriteToStream(utf8Json);
+                    writer.UnFlushedBytes = 0;
                 }
                 finally
                 {
@@ -279,6 +282,7 @@ namespace System.Text.Json.Serialization.Metadata
 
                     bufferWriter.WriteToStream(utf8Json);
                     bufferWriter.Clear();
+                    writer.UnFlushedBytes = 0;
 
                     Debug.Assert(state.PendingTask == null);
                 } while (!isFinalBlock);
